@@ -16,4 +16,16 @@ public class CombinedResponse {
     private double ageProbability;
     private String country;
     private double countryProbability;
+
+    private double roundProbability(double value){
+        return Math.floor(value * 100) / 100d;
+    }
+
+    public void setGenderProbability(double genderProbability) {
+        this.genderProbability = roundProbability(genderProbability);
+    }
+
+    public void setCountryProbability(double countryProbability) {
+        this.countryProbability = roundProbability(countryProbability);
+    }
 }

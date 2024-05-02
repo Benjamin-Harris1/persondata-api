@@ -1,94 +1,58 @@
 package edu.persondata.api.service;
 
 import edu.persondata.api.dto.*;
-import org.springframework.cache.annotation.Cacheable;
-import org.springframework.stereotype.Service;
-import org.springframework.web.reactive.function.client.WebClient;
-import reactor.core.publisher.Mono;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import edu.persondata.api.model.Person;
 
+import org.springframework.stereotype.Service;
+import reactor.core.publisher.Mono;
 import java.util.Comparator;
 
 @Service
 public class PersonDataService {
-    private final WebClient webClient = WebClient.create();
-    private static final Logger logger = LoggerFactory.getLogger(PersonDataService.class);
+    private final NationService nationService;
+    private final GenderService genderService;
+    private final AgeService ageService;
 
-    @Cacheable(value = "genders" , key = "#name")
-    public Mono<GenderizeResponse> getGender(String name){
-        logger.info("Fetching gender data");
-        return webClient.get()
-                .uri(uriBuilder -> uriBuilder.scheme("https")
-                        .host("api.genderize.io")
-                        .path("/")
-                        .queryParam("name", name)
-                        .build())
-                .retrieve()
-                .bodyToMono(GenderizeResponse.class)
-                .doOnSuccess(response -> logger.info("Gender data fetched successfully"));
-    }
-
-    @Cacheable(value = "nationalities" , key = "#name")
-    public Mono<NationalizeResponse> getNationality(String name){
-        logger.info("Fetching nationality data");
-        return webClient.get()
-                .uri(uriBuilder -> uriBuilder.scheme("https")
-                        .host("api.nationalize.io")
-                        .path("/")
-                        .queryParam("name", name)
-                        .build())
-                .retrieve()
-                .bodyToMono(NationalizeResponse.class)
-                .doOnSuccess(response -> logger.info("Nation data fetched successfully"));
-    }
-
-    @Cacheable(value = "ages" , key = "#name")
-    public Mono<AgifyResponse> getAge(String name) {
-        logger.info("Fetching age data");
-        return webClient.get()
-                .uri(uriBuilder -> uriBuilder.scheme("https")
-                        .host("api.agify.io")
-                        .path("/")
-                        .queryParam("name", name)
-                        .build())
-                .retrieve()
-                .bodyToMono(AgifyResponse.class)
-                .doOnSuccess(response -> logger.info("Age data fetched successfully"));
+    public PersonDataService(NationService nationService, GenderService genderService, AgeService ageService) {
+        this.nationService = nationService;
+        this.genderService = genderService;
+        this.ageService = ageService;
     }
 
     public Mono<CombinedResponse> getCombinedPersonData(String firstName, String middleName, String lastName) {
-        String fullName = String.join(" ", firstName, middleName != null ? middleName : "", lastName).trim();
-        Mono<GenderizeResponse> genderMono = getGender(firstName);
-        Mono<NationalizeResponse> nationalityMono = getNationality(firstName);
-        Mono<AgifyResponse> ageMono = getAge(firstName);
+        Person person = new Person(firstName, middleName, lastName);
 
-        return Mono.zip(genderMono, nationalityMono, ageMono)
-                   .map(tuple -> {
-                       GenderizeResponse gender = tuple.getT1();
-                       NationalizeResponse nationality = tuple.getT2();
-                       AgifyResponse age = tuple.getT3();
-                       CombinedResponse response = new CombinedResponse();
-                       response.setFullName(fullName);
-                       response.setFirstName(firstName);
-                       response.setMiddleName(middleName);
-                       response.setLastName(lastName);
-                       response.setGender(gender.getGender());
-                       response.setGenderProbability(gender.getProbability());
-                       response.setAge(age.getAge());
-                       response.setAgeProbability(age.getProbability());
-                       
-                       // Select the most country with highest probability
-                       CountryProbability mostProbableCountry = nationality.getCountry().stream()
-                       .max(Comparator.comparingDouble(CountryProbability::getProbability))
-                       .orElse(null);
-
-                       if (mostProbableCountry != null) {
-                        response.setCountry(mostProbableCountry.getCountryId());
-                        response.setCountryProbability(mostProbableCountry.getProbability());
-                       }
-
-                       return response;
-                   });
+        // First, get the nationality using the full name
+        Mono<NationalizeResponse> nationalityMono = nationService.getNationality(person);
+    
+        return nationalityMono.flatMap(nationality -> {
+            CountryProbability mostProbableCountry = nationality.getCountry().stream()
+                .max(Comparator.comparingDouble(CountryProbability::getProbability))
+                .orElse(null);
+    
+            String countryCode = mostProbableCountry != null ? mostProbableCountry.getCountry_id() : "Unknown";
+    
+            // Then, use the country code to get gender and age
+            Mono<GenderizeResponse> genderMono = genderService.getGender(person, countryCode);
+            Mono<AgifyResponse> ageMono = ageService.getAge(person, countryCode);
+    
+            return Mono.zip(genderMono, ageMono).map(tuple -> {
+                GenderizeResponse gender = tuple.getT1();
+                AgifyResponse age = tuple.getT2();
+    
+                CombinedResponse response = new CombinedResponse();
+                response.setFullName(person.getFullName());
+                response.setFirstName(person.getFirstName());
+                response.setMiddleName(person.getMiddleName());
+                response.setLastName(person.getLastName());
+                response.setGender(gender.getGender());
+                response.setGenderProbability(gender.getProbability());
+                response.setAge(age.getAge());
+                response.setAgeProbability(1.0);  // Default value since no probability is provided
+                response.setCountry(countryCode);
+                response.setCountryProbability(mostProbableCountry != null ? mostProbableCountry.getProbability() : 0.0);
+                return response;
+            });
+        });
     }
 }

@@ -6,6 +6,6 @@ import lombok.Setter;
 @Getter
 @Setter
 public class CountryProbability {
-    private String countryId;
+    private String country_id;
     private double probability;
 }
